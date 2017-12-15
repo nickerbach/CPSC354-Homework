@@ -2,11 +2,9 @@ module MoBettaEngine where
 
 {--
 The main job of this module is to provide a translation of the abstract syntax tree of a program into an executable computation.
-
 A computation here involves two main features:
  - IO for interacting with the user
  - A state that represents storage of integers in variables.
-
 The state allows a program to interpret expressions like "x + 1" and to update
 variables, so that assignment statements are possible.
 We keep the state in the form of a Data.HashMap. This is essentially a Haskell version of the Python notion of a dictionary.
@@ -14,8 +12,7 @@ Because our language does not support function definitions and recursion, the st
 --}
 
 import System.IO
---import Data.Hashable
-import qualified Data.HashMap as HM-- easy lookup and update of variables
+import qualified Data.HashMap as HM -- easy lookup and update of variables
 import Control.Monad.State
 import Control.Applicative
 import Data.Maybe (fromMaybe) -- using fromMaybe to simplify some code
@@ -59,7 +56,7 @@ statementAction (While b s) = whileAction (boolCalc b) (statementAction s)
                         -- compute "while b s"
 statementAction (Assign v e) = assignAction v (intCalc e)
                         -- compute e, and assign to v
-statementAction (Block ls) = makeProgram ls
+statementAction (Block ls) = blockAction $ map statementAction ls
                         -- compute a sequence of individual computations
                         -- by translating each into a computation
 
@@ -96,7 +93,6 @@ retrieveEnv name = do
 
 {--------------------------------------------------------------------------
 Interpretations of individual statement types
-
 Now we define the semantics of each type of action.
 ---------------------------------------------------------------------------}
 
@@ -116,34 +112,100 @@ msgAction s = doIO $ putStr s
 
 -- Display result of computing an integer
 printAction :: IntCalc -> Action
-printAction intCalc = ...
+printAction intCalc = do
+  n <- intCalc -- execute given integer calculation to obtain an Integer
+  doIO $ putStr $ show n -- display it
 
 -- Compute an integer, then store it
 assignAction :: String -> IntCalc -> Action
-assignAction v intCalc = ...
+assignAction v intCalc = do
+  n <- intCalc -- calculate the right-hand side of an assignment
+  updateEnv v n -- store the result
 
 -- Compute a boolean, use it to decide which computation to do.
 ifAction :: BoolCalc -> Action -> Action -> Action
-ifAction boolCalc action1 action2 = ...
+ifAction boolCalc action1 action2 = do
+  cond <- boolCalc -- calculate the test condition
+  if cond then     -- decide what to do
+    action1
+  else
+    action2
 
 whileAction :: BoolCalc -> Action -> Action
-whileAction boolCalc action = ...
+whileAction boolCalc action = do
+  cond <- boolCalc -- calculate the test
+  when cond loop   -- do the body of the loop
+  where
+    loop = do
+      action
+      whileAction boolCalc action
 
 -- Do a list of actions sequentially.
+-- NB. There is a combinator for this, but I've written it out for clarity.
 blockAction :: [Action] -> Action
-blockAction [] = ...
-blockAction (a:ls) = ...
+blockAction [] = return ()
+blockAction (a:ls) = do
+  a
+  blockAction ls
 
+{--------------------------------------------------------------------------
+Interpretations of integer and boolean expressions
+---------------------------------------------------------------------------}
+
+-- Lookup tables for the various arithmetic and Boolean operators.
+--  These associate AST operators with their semantics.
+-- I have written things this way to make integer and boolean calculations
+-- easier to code.
+
+aBinOps =
+  [ (Add, (+))
+  , (Sub, (-))
+  , (Mul, (*))
+  , (Div, div)
+  , (Mod, mod)]
+
+aUnOps =  [(Neg, negate)]
+
+bBinOps =
+  [ (And, (&&))
+  , (Or, (||))]
+
+bUnOps =  [(Not, not)]
+
+relnOps =
+  [ (Greater, (>))
+  , (GreaterEqual, (>=))
+  , (Less, (<))
+  , (LessEqual, (<=))
+  , (Equal, (==))
+  , (NEqual, (/=))]
+
+-- Find the actual operation associated with a constructor.
+-- N.B. lookup returns a (Maybe ...).
+-- But the only way it would return Nothing
+--   is if something impossible has happened (the parser somehow produced an
+--   impossible AST).
+-- So it is safe to unwrap a result of the form (Just ...)
+-- The combination of fromMaybe with (error ...) does that
+opLookup :: Eq const => const -> [(const, sem)] -> sem
+opLookup op opTable =
+  fromMaybe (error "Undefined operator. Should never happen.")
+            (lookup op opTable)
 
 -- This defines the translation of a BExpr into a computation of Booleans
 boolCalc :: BExpr -> BoolCalc
-boolCalc (BoolConst b) = ...
-boolCalc (Reln cOp expr1 expr2) = ...
-boolCalc (BBin op expr1 expr2) =  ...
-boolCalc (BUn op expr) = ...
+boolCalc (BoolConst b) = return b
+boolCalc (Reln cOp expr1 expr2)
+  = liftA2 (opLookup cOp relnOps) (intCalc expr1) (intCalc expr2)
+boolCalc (BBin op expr1 expr2)
+  = liftA2 (opLookup op bBinOps) (boolCalc expr1) (boolCalc expr2)
+boolCalc (BUn op expr)
+  = fmap (opLookup op bUnOps) (boolCalc expr)
 
 intCalc :: AExpr -> IntCalc
-intCalc (Var v) = ...
-intCalc (IntConst val) = ...
-intCalc (ABin op expr1 expr2) = ...
-intCalc (AUn op expr) = ...
+intCalc (Var v) = retrieveEnv v
+intCalc (IntConst val) = return val
+intCalc (ABin op expr1 expr2)
+  = liftA2 (opLookup op aBinOps) (intCalc expr1) (intCalc expr2)
+intCalc (AUn op expr)
+  = fmap (opLookup op aUnOps) (intCalc expr)

@@ -20,4 +20,4 @@ main = do
     case pr of
       Right prog -> evalStateT (makeProgram prog) emptyEnv
       Left err  -> putStrLn $ parseErrorPretty' contents err
-    hClose handle  -- your mom taught you to clean up after yourself
+    hClose handle

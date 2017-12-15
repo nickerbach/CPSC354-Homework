@@ -7,15 +7,18 @@ import Text.Megaparsec
 import Text.Megaparsec.Char -- various basic parsers
 import qualified Text.Megaparsec.Char.Lexer as L
 import Text.Megaparsec.Expr
+import Data.Void
 
 import MoBettaAST
 
 -- Simplest use of Parsec is all we need.
 
-type Parser = Parsec () String
+type Parser = Parsec Void String
 
 
-programParser = sepEndBy1 statementParser semicolon <?>  "program"
+programParser = do
+  spaceConsumer
+  sepEndBy1 statementParser semicolon <?>  "program"
 
 
 statementParser = choice
@@ -27,7 +30,8 @@ statementParser = choice
     , whileStmt
     , assignmentStmt
     , blockStmt
-  ] where
+  ] <?> "statement"
+  where
     skipStmt = lexeme (string "skip") >> return Skip
     printStmt = do
       lexeme (string "print")
@@ -37,37 +41,32 @@ statementParser = choice
       lexeme (string "read")
       i <- identifier
       return (Read i)
-
     messageStmt = do
       lexeme (string "message")
-      m <- stringLiteral
-      return (Msg m)
+      s <- lexeme stringLiteral
+      return (Msg s)
     ifStmt = do
-      lexeme("if")
+      lexeme (string "if")
       b <- bExpr
-      lexeme("then")
-      s1<- statementParser
-      lexeme("else")
-      s2<- statementParser
-      return(If b s1 s2)
+      lexeme (string "then")
+      t <- statementParser
+      lexeme (string "else")
+      e <- statementParser
+      return (If b t e)
     whileStmt = do
       lexeme (string "while")
       b <- bExpr
       lexeme (string "do")
-      s1<- statementParser
-      return(While b s1)
-
+      e <- statementParser
+      return (While b e)
     assignmentStmt = do
-      i <- identifier
-      lexeme (string "=")
+      v <- identifier
+      lexeme (char '=')
       e <- aExpr
-      return (Assign i e)
+      return (Assign v e)
     blockStmt = do
-      lexeme (string "{")
-      p <- programParser
-      lexeme (string "}")
-      return (Block p)
-    stubStatement = return Skip -- this is a stub that needs to be replaced in the above parsers. It is here only so this code will compile
+      stmts <- between lbrace rbrace programParser
+      return (Block stmts)
 
 aExpr = makeExprParser aFactor aOpTable <?> "arithmetic expression"
 
@@ -85,12 +84,16 @@ aOpTable = [ [ prefix  "-"  (AUn Neg)
           , [ binary  "+"  (ABin Add)
             , binary  "-"  (ABin Sub)  ] ]
 
-bExpr :: Parser BExpr
-bExpr = return (BoolConst True) -- Also a stub that needs to be fleshed out.
-                                -- Your implementation should follow the
-                                -- idea used in AExpr
+bExpr = makeExprParser bFactor bOpTable <?> "Boolean expression"
 
--- This is a bit tricky. It is a parser for expressions like x % 2 == 0"
+bFactor = choice [ comparison
+                 , between lparen rparen bExpr
+                 ] <?> "boolean factor"
+
+bOpTable = [ [ prefix  "not"  (BUn Not)]
+           , [ binary  "and"  (BBin And)
+             , binary  "or"  (BBin Or)] ]
+
 comparison = do
     e1 <- aExpr
     c  <- comparator
@@ -108,10 +111,10 @@ compTable = [
   , atomic "!=" NEqual
   ]
 
--- These help declare parsers for operators such as "+", "and", "<=", "not" etc.
-binary  opName f = InfixL (atomic opName f) -- make a left associative binary
-prefix  opName f = Prefix (atomic opName f) -- make a prefix operator
-atomic  opName f = f <$ lexeme (string opName) -- just parse the operator by itself and return a specified result (f).
+-- These help declare operators
+binary  opName f = InfixL (atomic opName f) -- (f <$ lexeme (string opName))
+prefix  opName f = Prefix (atomic opName f)
+atomic  opName f = f <$ lexeme (string opName)
 
 
 spaceConsumer :: Parser ()
